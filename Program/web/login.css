@@ -1,0 +1,210 @@
+/* =============================================
+   login.css - Eel Login Page Styles
+   ============================================= */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Inter', sans-serif;
+    background: #0f0f1a;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+}
+
+/* Animated background */
+.bg-overlay {
+    position: fixed;
+    inset: 0;
+    background:
+        radial-gradient(ellipse at 20% 50%, rgba(72, 114, 196, 0.15) 0%, transparent 60%),
+        radial-gradient(ellipse at 80% 20%, rgba(138, 89, 255, 0.12) 0%, transparent 50%),
+        radial-gradient(ellipse at 60% 80%, rgba(0, 200, 150, 0.08) 0%, transparent 50%);
+    pointer-events: none;
+}
+
+.login-wrapper {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 24px;
+    width: 100%;
+    max-width: 420px;
+    padding: 20px;
+    animation: fadeInDown 0.6s ease;
+}
+
+/* Logo Section */
+.logo-section {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+}
+
+.logo-img {
+    width: 120px;
+    height: 120px;
+    object-fit: contain;
+    filter: drop-shadow(0 0 20px rgba(72, 114, 196, 0.6));
+    animation: pulse 3s ease-in-out infinite;
+}
+
+.app-title {
+    color: #ffffff;
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    text-align: center;
+}
+
+.app-subtitle {
+    color: #a0a0b8;
+    font-size: 13px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+}
+
+/* Login Card */
+.login-card {
+    background: rgba(255, 255, 255, 0.05);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 20px;
+    padding: 36px 32px;
+    width: 100%;
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.4);
+}
+
+.login-title {
+    color: #ffffff;
+    font-size: 24px;
+    font-weight: 700;
+    margin-bottom: 6px;
+}
+
+.login-desc {
+    color: #7a7a9a;
+    font-size: 13px;
+    margin-bottom: 24px;
+}
+
+/* Error Message */
+.error-msg {
+    background: rgba(255, 80, 80, 0.15);
+    border: 1px solid rgba(255, 80, 80, 0.4);
+    color: #ff6b6b;
+    border-radius: 10px;
+    padding: 10px 14px;
+    font-size: 13px;
+    margin-bottom: 16px;
+}
+
+.hidden {
+    display: none;
+}
+
+/* Form */
+.form-group {
+    margin-bottom: 18px;
+}
+
+.form-group label {
+    display: block;
+    color: #a0a0c0;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+}
+
+.form-group input {
+    width: 100%;
+    background: rgba(255, 255, 255, 0.07);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 12px;
+    padding: 13px 16px;
+    color: #ffffff;
+    font-size: 14px;
+    font-family: 'Inter', sans-serif;
+    outline: none;
+    transition: all 0.3s ease;
+}
+
+.form-group input::placeholder {
+    color: #4a4a6a;
+}
+
+.form-group input:focus {
+    border-color: #4872c4;
+    background: rgba(72, 114, 196, 0.1);
+    box-shadow: 0 0 0 3px rgba(72, 114, 196, 0.15);
+}
+
+/* Login Button */
+.login-btn {
+    width: 100%;
+    background: linear-gradient(135deg, #4872c4, #7b52d4);
+    border: none;
+    border-radius: 12px;
+    padding: 14px;
+    color: #ffffff;
+    font-size: 15px;
+    font-weight: 600;
+    font-family: 'Inter', sans-serif;
+    cursor: pointer;
+    margin-top: 8px;
+    transition: all 0.3s ease;
+    letter-spacing: 0.5px;
+}
+
+.login-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px rgba(72, 114, 196, 0.4);
+    background: linear-gradient(135deg, #5882d4, #8b62e4);
+}
+
+.login-btn:active {
+    transform: translateY(0);
+}
+
+.login-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    transform: none;
+}
+
+/* Version */
+.version-text {
+    color: #3a3a5a;
+    font-size: 11px;
+    text-align: center;
+    margin-top: 20px;
+}
+
+/* Animations */
+@keyframes fadeInDown {
+    from {
+        opacity: 0;
+        transform: translateY(-30px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes pulse {
+    0%, 100% { filter: drop-shadow(0 0 20px rgba(72, 114, 196, 0.6)); }
+    50% { filter: drop-shadow(0 0 35px rgba(72, 114, 196, 0.9)); }
+}
