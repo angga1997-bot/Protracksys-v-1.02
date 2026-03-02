@@ -36,6 +36,7 @@ def build():
             os.makedirs(folder)
             print(f"Created missing folder: {folder}/")
 
+
     cmd = [
         sys.executable, "-m", "PyInstaller",
         "--noconfirm",
