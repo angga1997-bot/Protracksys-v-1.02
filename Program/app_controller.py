@@ -83,6 +83,12 @@ class AppController(tk.Tk):
         if page_name not in self.pages:
             return
         
+        # Notify previous page it is being hidden
+        if self.active_page and self.active_page != page_name:
+            prev = self.pages.get(self.active_page)
+            if prev and hasattr(prev, 'on_hide'):
+                prev.on_hide()
+        
         self.sidebar.set_active(page_name)
         self.active_page = page_name
         

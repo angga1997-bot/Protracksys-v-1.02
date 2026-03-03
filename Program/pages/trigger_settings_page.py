@@ -50,9 +50,9 @@ class TriggerSettingsPage(BasePage):
         # MouseWheel handled globally in main.py
     
     def _create_info_section(self, parent):
-        """Info section"""
+        """Info section + Live PLC Monitor panel"""
         info = tk.Frame(parent, bg=self.colors["accent_yellow"], padx=20, pady=15)
-        info.pack(fill="x", padx=10, pady=10)
+        info.pack(fill="x", padx=10, pady=(10, 4))
         
         tk.Label(
             info,
@@ -73,6 +73,177 @@ class TriggerSettingsPage(BasePage):
             fg="#1e1e2e",
             justify="left"
         ).pack(anchor="w", pady=(5, 0))
+        
+        # ── Live Monitor Panel ────────────────────────────────────────
+        monitor = tk.LabelFrame(
+            parent,
+            text="🔬 Live PLC Monitor",
+            font=("Segoe UI", 12, "bold"),
+            bg=self.colors["bg_card"],
+            fg=self.colors["accent_purple"],
+            padx=20, pady=12
+        )
+        monitor.pack(fill="x", padx=10, pady=(4, 8))
+        
+        row = tk.Frame(monitor, bg=self.colors["bg_card"])
+        row.pack(fill="x")
+        
+        # Connection lamp
+        tk.Label(row, text="PLC Connection:", font=("Segoe UI", 10),
+                 bg=self.colors["bg_card"], fg=self.colors["text_secondary"]
+                 ).pack(side="left", padx=(0, 6))
+        self._conn_lamp = tk.Label(row, text="⬤", font=("Segoe UI", 18),
+                                    bg=self.colors["bg_card"], fg="#555555")
+        self._conn_lamp.pack(side="left")
+        self._conn_label = tk.Label(row, text="Not connected",
+                                     font=("Segoe UI", 9), bg=self.colors["bg_card"],
+                                     fg=self.colors["text_secondary"])
+        self._conn_label.pack(side="left", padx=(4, 20))
+        
+        # Trigger bit lamp
+        tk.Label(row, text="Trigger Bit:", font=("Segoe UI", 10),
+                 bg=self.colors["bg_card"], fg=self.colors["text_secondary"]
+                 ).pack(side="left", padx=(0, 6))
+        self._bit_lamp = tk.Label(row, text="⬤", font=("Segoe UI", 18),
+                                   bg=self.colors["bg_card"], fg="#555555")
+        self._bit_lamp.pack(side="left")
+        self._bit_label = tk.Label(row, text="OFF",
+                                    font=("Segoe UI", 9, "bold"),
+                                    bg=self.colors["bg_card"],
+                                    fg=self.colors["text_secondary"])
+        self._bit_label.pack(side="left", padx=(4, 20))
+        
+        # Raw word value
+        self._word_label = tk.Label(row, text="Word: —",
+                                     font=("Segoe UI", 9),
+                                     bg=self.colors["bg_card"],
+                                     fg=self.colors["text_secondary"])
+        self._word_label.pack(side="left", padx=(0, 20))
+        
+        # Buttons
+        btn_frame = tk.Frame(monitor, bg=self.colors["bg_card"])
+        btn_frame.pack(fill="x", pady=(8, 0))
+        
+        self._monitor_btn = tk.Button(
+            btn_frame, text="▶ Start Monitor",
+            font=("Segoe UI", 10),
+            bg=self.colors["accent_green"], fg="#1e1e2e",
+            relief="flat", cursor="hand2", padx=12, pady=4,
+            command=self._toggle_live_monitor
+        )
+        self._monitor_btn.pack(side="left", padx=(0, 10))
+        
+        self._monitor_status = tk.Label(
+            btn_frame, text="Click 'Start Monitor' to watch PLC in real-time",
+            font=("Segoe UI", 9, "italic"),
+            bg=self.colors["bg_card"], fg=self.colors["text_secondary"]
+        )
+        self._monitor_status.pack(side="left")
+        
+        self._live_monitor_running = False
+        self._live_monitor_client = None
+    
+    # ── Live Monitor helpers ──────────────────────────────────────────
+    
+    def _toggle_live_monitor(self):
+        if self._live_monitor_running:
+            self._stop_live_monitor()
+        else:
+            self._start_live_monitor()
+    
+    def _start_live_monitor(self):
+        from utils.plc_fins import PLCFinsClient
+        self._live_monitor_running = True
+        self._monitor_btn.configure(text="■ Stop Monitor",
+                                     bg=self.colors["accent_red"])
+        self._monitor_status.configure(text="Connecting…")
+        
+        def _connect():
+            client = PLCFinsClient(self.controller.plc_config)
+            ok, msg = client.connect()
+            if ok:
+                self._live_monitor_client = client
+                self.after(0, lambda: self._monitor_status.configure(
+                    text=f"Connected ✓  {msg[:50]}"))
+                self.after(0, lambda: self._conn_lamp.configure(fg="#a6e3a1"))
+                self.after(0, lambda: self._conn_label.configure(
+                    text="Connected", fg=self.colors["accent_green"]))
+                self.after(0, self._poll_trigger_bit)
+            else:
+                self._live_monitor_running = False
+                self.after(0, lambda: self._conn_lamp.configure(fg="#f38ba8"))
+                self.after(0, lambda: self._conn_label.configure(
+                    text="Failed", fg=self.colors["accent_red"]))
+                self.after(0, lambda: self._monitor_status.configure(
+                    text=f"❌ {msg}"))
+                self.after(0, lambda: self._monitor_btn.configure(
+                    text="▶ Start Monitor", bg=self.colors["accent_green"]))
+        
+        import threading
+        threading.Thread(target=_connect, daemon=True).start()
+    
+    def _stop_live_monitor(self):
+        self._live_monitor_running = False
+        if self._live_monitor_client:
+            try: self._live_monitor_client.disconnect()
+            except: pass
+            self._live_monitor_client = None
+        self._conn_lamp.configure(fg="#555555")
+        self._conn_label.configure(text="Not connected",
+                                    fg=self.colors["text_secondary"])
+        self._bit_lamp.configure(fg="#555555")
+        self._bit_label.configure(text="OFF", fg=self.colors["text_secondary"])
+        self._word_label.configure(text="Word: —")
+        self._monitor_btn.configure(text="▶ Start Monitor",
+                                     bg=self.colors["accent_green"])
+        self._monitor_status.configure(text="Monitor stopped.")
+    
+    def _poll_trigger_bit(self):
+        """Read main trigger address and update lamps. Reschedule every 400ms."""
+        if not self._live_monitor_running or not self._live_monitor_client:
+            return
+        try:
+            area   = self.main_area_var.get()
+            addr   = int(self.main_addr_entry.get())
+            bit    = int(self.main_bit_entry.get())
+        except Exception:
+            self.after(400, self._poll_trigger_bit)
+            return
+        
+        def _read():
+            client = self._live_monitor_client
+            if not client or not client.connected:
+                self.after(0, self._stop_live_monitor)
+                return
+            ok, data = client.read_memory(area, addr, 1)
+            if ok and data:
+                word = data[0]
+                bit_val = (word >> bit) & 1
+                self.after(0, lambda: self._update_bit_lamp(bit_val, word))
+            else:
+                # connection lost
+                self.after(0, lambda: self._conn_lamp.configure(fg="#f38ba8"))
+                self.after(0, lambda: self._conn_label.configure(
+                    text="Read failed", fg=self.colors["accent_red"]))
+            if self._live_monitor_running:
+                self.after(400, self._poll_trigger_bit)
+        
+        import threading
+        threading.Thread(target=_read, daemon=True).start()
+    
+    def _update_bit_lamp(self, bit_val, word):
+        if bit_val:
+            self._bit_lamp.configure(fg="#a6e3a1")   # green
+            self._bit_label.configure(text="ON ✓", fg=self.colors["accent_green"])
+        else:
+            self._bit_lamp.configure(fg="#f38ba8")   # red
+            self._bit_label.configure(text="OFF", fg=self.colors["accent_red"])
+        self._word_label.configure(text=f"Word: {word}  (bit{self.main_bit_entry.get()}={bit_val})")
+    
+    def on_hide(self):
+        """Stop monitor when navigating away."""
+        self._stop_live_monitor()
+
     
     def _create_main_trigger_section(self, parent):
         """Main trigger section"""
