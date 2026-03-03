@@ -49,51 +49,49 @@ class PLCFinsClient:
         self.config    = config
         self.connected = False
         self._conn     = None          # TCPFinsConnection instance
+        import threading
+        self._lock = threading.Lock()
 
     # ---------------------------------------------------------------
     def connect(self) -> tuple:
-        """
-        Buka koneksi TCP ke PLC dan lakukan FINS handshake.
+        with self._lock:
+            if self.connected:
+                return True, "Already connected"
+            conn_cfg = self.config.get("connection", {})
+            ip       = conn_cfg.get("plc_ip",   "192.168.1.1")
+            port     = int(conn_cfg.get("plc_port", 9600))
+            timeout  = conn_cfg.get("timeout", 5)
 
-        Returns:
-            (True,  info_str)   on success
-            (False, error_str)  on failure
-        """
-        conn_cfg = self.config.get("connection", {})
-        ip       = conn_cfg.get("plc_ip",   "192.168.1.1")
-        port     = int(conn_cfg.get("plc_port", 9600))
-        timeout  = conn_cfg.get("timeout", 5)
+            if not _FINS_LIB_AVAILABLE:
+                # Fallback: use our own raw FINS/TCP implementation
+                return self._connect_raw(ip, port, timeout)
 
-        if not _FINS_LIB_AVAILABLE:
-            # Fallback: use our own raw FINS/TCP implementation
-            return self._connect_raw(ip, port, timeout)
-
-        try:
-            self._conn = TCPFinsConnection()
-            self._conn.fins_socket.settimeout(timeout)
-            self._conn.connect(ip_address=ip, port=port, bind_port=0)
-            self.connected = True
-            src = self._conn.srce_node_add
-            dst = self._conn.dest_node_add
-            return True, (
-                f"Connected to {ip}:{port} "
-                f"(src_node={src}, dst_node={dst})"
-            )
-        except Exception as e:
-            self._conn = None
-            self.connected = False
-            return False, f"Connection failed: {e}"
+            try:
+                self._conn = TCPFinsConnection()
+                self._conn.fins_socket.settimeout(timeout)
+                self._conn.connect(ip_address=ip, port=port, bind_port=0)
+                self.connected = True
+                src = self._conn.srce_node_add
+                dst = self._conn.dest_node_add
+                return True, (
+                    f"Connected to {ip}:{port} "
+                    f"(src_node={src}, dst_node={dst})"
+                )
+            except Exception as e:
+                self._conn = None
+                self.connected = False
+                return False, f"Connection failed: {e}"
 
     # ---------------------------------------------------------------
     def disconnect(self):
-        """Tutup koneksi."""
-        self.connected = False
-        if self._conn:
-            try:
-                self._conn.fins_socket.close()
-            except Exception:
-                pass
-            self._conn = None
+        with self._lock:
+            self.connected = False
+            if self._conn:
+                try:
+                    self._conn.fins_socket.close()
+                except Exception:
+                    pass
+                self._conn = None
 
     # ---------------------------------------------------------------
     def read_memory(self, area_type: str, start_address: int, length: int) -> tuple:
@@ -104,49 +102,50 @@ class PLCFinsClient:
             (True,  [int, int, ...])   list of word values on success
             (False, error_str)         on failure
         """
-        if not self.connected or self._conn is None:
-            return False, "Not connected to PLC"
+        with self._lock:
+            if not self.connected or self._conn is None:
+                return False, "Not connected to PLC"
 
-        if not _FINS_LIB_AVAILABLE:
-            return self._read_memory_raw(area_type, start_address, length)
+            if not _FINS_LIB_AVAILABLE:
+                return self._read_memory_raw(area_type, start_address, length)
 
-        # ── Get area code bytes from fins library ──────────────────
-        attr_name = _AREA_MAP.get(area_type)
-        if attr_name is None:
-            return False, f"Unknown memory area: {area_type}"
+            # ── Get area code bytes from fins library ──────────────────
+            attr_name = _AREA_MAP.get(area_type)
+            if attr_name is None:
+                return False, f"Unknown memory area: {area_type}"
 
-        mem_areas  = FinsPLCMemoryAreas()
-        area_bytes = getattr(mem_areas, attr_name)   # e.g. b'\x82' for DM
+            mem_areas  = FinsPLCMemoryAreas()
+            area_bytes = getattr(mem_areas, attr_name)   # e.g. b'\x82' for DM
 
-        # ── Build the beginning address (3 bytes: word_hi, word_lo, bit) ──
-        begin_addr = start_address.to_bytes(2, 'big') + b'\x00'
+            # ── Build the beginning address (3 bytes: word_hi, word_lo, bit) ──
+            begin_addr = start_address.to_bytes(2, 'big') + b'\x00'
 
-        try:
-            raw = self._conn.memory_area_read(
-                memory_area_code  = area_bytes,
-                beginning_address = begin_addr,
-                number_of_items   = length
-            )
-        except Exception as e:
-            self.connected = False
-            return False, f"Read error: {e}"
+            try:
+                raw = self._conn.memory_area_read(
+                    memory_area_code  = area_bytes,
+                    beginning_address = begin_addr,
+                    number_of_items   = length
+                )
+            except Exception as e:
+                self.connected = False
+                return False, f"Read error: {e}"
 
-        # ── Parse raw response ─────────────────────────────────────
-        # raw = full FINS response frame bytes (returned by fins lib)
-        # Layout: 10b header + 2b cmd + 2b end_code + 2*N word data
-        if raw is None or len(raw) < 14:
-            return False, f"Response too short or empty ({type(raw).__name__}: {raw!r})"
+            # ── Parse raw response ─────────────────────────────────────
+            # raw = full FINS response frame bytes (returned by fins lib)
+            # Layout: 10b header + 2b cmd + 2b end_code + 2*N word data
+            if raw is None or len(raw) < 14:
+                return False, f"Response too short or empty ({type(raw).__name__}: {raw!r})"
 
-        # Check end code
-        end_code = struct.unpack(">H", raw[12:14])[0]
-        if end_code != 0x0000:
-            return False, _fins_end_code_desc(end_code)
+            # Check end code
+            end_code = struct.unpack(">H", raw[12:14])[0]
+            if end_code != 0x0000:
+                return False, _fins_end_code_desc(end_code)
 
-        word_bytes = raw[14:]
-        num_words  = len(word_bytes) // 2
+            word_bytes = raw[14:]
+            num_words  = len(word_bytes) // 2
 
-        if num_words == 0:
-            return False, "PLC returned 0 words"
+            if num_words == 0:
+                return False, "PLC returned 0 words"
 
         words = [
             struct.unpack(">H", word_bytes[i*2 : i*2+2])[0]

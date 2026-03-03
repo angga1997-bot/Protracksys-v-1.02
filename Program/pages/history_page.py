@@ -750,7 +750,7 @@ class HistoryPage(BasePage):
             self.context_menu.post(event.x_root, event.y_root)
     
     def _on_double_click(self, event):
-        """Double click to search"""
+        """Double click to view image or search"""
         item = self.tree.identify_row(event.y)
         column = self.tree.identify_column(event.x)
         
@@ -758,11 +758,36 @@ class HistoryPage(BasePage):
             col_idx = int(column.replace("#", "")) - 1
             values = self.tree.item(item, 'values')
             
-            if 0 <= col_idx < len(values):
+            if 0 < col_idx < len(values):
                 value = str(values[col_idx])
-                if value:
-                    self.search_var.set(value)
-                    self._apply_search()
+                if not value:
+                    return
+                
+                # Cek apakah kolom ini tipe image
+                columns_config = self.controller.table_data.get("columns", [])
+                cfg_idx = col_idx - 1
+                if 0 <= cfg_idx < len(columns_config):
+                    col_cfg = columns_config[cfg_idx]
+                    if isinstance(col_cfg, dict) and col_cfg.get("data_source") == "image":
+                        folder = col_cfg.get("image_config", {}).get("folder_path", "").strip()
+                        if not folder:
+                            t_idx = col_cfg.get("image_config", {}).get("trigger_index", 0)
+                            trigs = self.controller.data_manager.trigger_config.get("image_triggers", [])
+                            if 0 <= t_idx - 1 < len(trigs):
+                                folder = trigs[t_idx - 1].get("folder_path", "")
+                            elif trigs:
+                                folder = trigs[0].get("folder_path", "")
+                        
+                        import os
+                        img_path = os.path.join(folder, value) if folder else ""
+                        if img_path and os.path.isfile(img_path):
+                            if hasattr(os, 'startfile'):
+                                os.startfile(img_path)
+                            return
+                
+                # Fallback: search
+                self.search_var.set(value)
+                self._apply_search()
     
     def _copy_selected_value(self):
         """Copy selected cell"""

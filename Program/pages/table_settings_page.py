@@ -451,25 +451,26 @@ class TableSettingsPage(BasePage):
         start_entry.pack(side="left", ipady=2)
         widgets["start_address"] = start_entry
         
-        tk.Label(plc_row, text="Index:", font=("Segoe UI", 9),
+        tk.Label(plc_row, text="Format:", font=("Segoe UI", 9),
                 bg=self.colors["accent_purple"], fg="#1e1e2e").pack(side="left", padx=(10, 3))
         
-        index_entry = tk.Entry(plc_row, font=("Segoe UI", 9),
-                              bg=self.colors["bg_card"], fg=self.colors["text_primary"],
-                              insertbackground=self.colors["text_primary"],
-                              relief="flat", width=5)
-        index_entry.insert(0, str(plc_config.get("data_index", 0)))
-        index_entry.pack(side="left", ipady=2)
-        widgets["data_index"] = index_entry
+        format_var = tk.StringVar(value=plc_config.get("data_format", "ascii"))
+        format_combo = ttk.Combobox(
+            plc_row, textvariable=format_var,
+            values=["ascii", "word"],
+            width=6, state="readonly"
+        )
+        format_combo.pack(side="left", ipady=0)
+        widgets["data_format"] = format_var
         
-        tk.Label(plc_row, text="Len:", font=("Segoe UI", 9),
+        tk.Label(plc_row, text="Words:", font=("Segoe UI", 9),
                 bg=self.colors["accent_purple"], fg="#1e1e2e").pack(side="left", padx=(10, 3))
         
         len_entry = tk.Entry(plc_row, font=("Segoe UI", 9),
                             bg=self.colors["bg_card"], fg=self.colors["text_primary"],
                             insertbackground=self.colors["text_primary"],
                             relief="flat", width=5)
-        len_entry.insert(0, str(plc_config.get("length", 150)))
+        len_entry.insert(0, str(plc_config.get("length", 10)))
         len_entry.pack(side="left", ipady=2)
         widgets["length"] = len_entry
         
@@ -820,8 +821,10 @@ class TableSettingsPage(BasePage):
                     col["plc_config"] = {
                         "area_type": widgets["area_type"].get(),
                         "start_address": int(widgets["start_address"].get()),
-                        "data_index": int(widgets["data_index"].get()),
-                        "length": int(widgets["length"].get())
+                        "data_index": 0,
+                        "data_format": widgets.get("data_format").get() if "data_format" in widgets else "ascii",
+                        "length": int(widgets["length"].get()),
+                        "ascii_length": int(widgets["length"].get())
                     }
                 elif source == "image":
                     trigger_str = widgets["trigger_index"].get()

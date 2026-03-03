@@ -889,7 +889,34 @@ class DashboardPage(BasePage):
             
             for col_idx, col in enumerate(columns):
                 width = col.get("width", 120) if isinstance(col, dict) else 120
+                source = col.get("data_source", "manual") if isinstance(col, dict) else "manual"
                 value = row_data[col_idx] if col_idx < len(row_data) else ""
+                
+                if source == "image" and value:
+                    folder = col.get("image_config", {}).get("folder_path", "").strip()
+                    if not folder:
+                        t_idx = col.get("image_config", {}).get("trigger_index", 0)
+                        trigs = self.controller.data_manager.trigger_config.get("image_triggers", [])
+                        if 0 <= t_idx - 1 < len(trigs):
+                            folder = trigs[t_idx - 1].get("folder_path", "")
+                        elif trigs:
+                            folder = trigs[0].get("folder_path", "")
+                            
+                    img_path = os.path.join(folder, str(value)) if folder else ""
+                    if img_path and os.path.isfile(img_path):
+                        try:
+                            img = Image.open(img_path)
+                            img.thumbnail((50, 50))
+                            photo = ImageTk.PhotoImage(img)
+                            self.photo_refs[f"r{row_idx}_c{col_idx}"] = photo
+                            
+                            btn = tk.Button(inner, image=photo, bg=bg, activebackground=self.colors["bg_hover"],
+                                            relief="flat", cursor="hand2",
+                                            command=lambda p=img_path: os.startfile(p) if hasattr(os, 'startfile') else None)
+                            btn.grid(row=row_idx + 1, column=col_idx + 1, padx=1, pady=1, sticky="nsew")
+                            continue
+                        except:
+                            pass
                 
                 tk.Label(inner, text=str(value), font=("Segoe UI", 9),
                         bg=bg, fg=self.colors["text_primary"],
@@ -1180,15 +1207,26 @@ class DashboardPage(BasePage):
                     areas[key] = cfg
         plc_data = {}
         if areas:
-            dc = PLCFinsClient(self.controller.plc_config)
-            ok, msg = dc.connect()
+            dc = getattr(self, "_plc_client", None)
+            must_disconnect = False
+            ok = False
+            msg = ""
+            
+            if not dc or not dc.connected:
+                dc = PLCFinsClient(self.controller.plc_config)
+                ok, msg = dc.connect()
+                must_disconnect = True
+            else:
+                ok = True
+                
             if ok:
                 for key, cfg in areas.items():
                     rd_ok, data = dc.read_memory(cfg["area_type"], cfg["start_address"], cfg["length"])
                     plc_data[key] = data if rd_ok else []
                     if not rd_ok:
                         print(f"[Trigger] read_memory failed {key}: {data}")
-                dc.disconnect()
+                if must_disconnect:
+                    dc.disconnect()
             else:
                 print(f"[Trigger] Data connection failed: {msg}")
         # Build row
