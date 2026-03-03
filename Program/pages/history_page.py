@@ -750,44 +750,102 @@ class HistoryPage(BasePage):
             self.context_menu.post(event.x_root, event.y_root)
     
     def _on_double_click(self, event):
-        """Double click to view image or search"""
+        """Double click: open image zoom popup, or search text value."""
         item = self.tree.identify_row(event.y)
         column = self.tree.identify_column(event.x)
         
-        if item and column:
-            col_idx = int(column.replace("#", "")) - 1
-            values = self.tree.item(item, 'values')
-            
-            if 0 <= col_idx < len(values):
-                value = str(values[col_idx])
-                if not value:
+        if not item or not column:
+            return
+        
+        col_idx = int(column.replace("#", "")) - 1  # 0-based; col #1 = row number
+        values = self.tree.item(item, 'values')
+        
+        if not (0 <= col_idx < len(values)):
+            return
+        
+        value = str(values[col_idx])
+        if not value:
+            return
+        
+        # col_idx 0 = row-number column; data columns start at 1
+        # columns_config index = col_idx - 1
+        columns_config = self.controller.table_data.get("columns", [])
+        cfg_idx = col_idx - 1
+        if 0 <= cfg_idx < len(columns_config):
+            col_cfg = columns_config[cfg_idx]
+            if isinstance(col_cfg, dict) and col_cfg.get("data_source") == "image":
+                # Resolve image path
+                import os
+                from config import CAPTURED_DIR
+                img_path = os.path.join(CAPTURED_DIR, value)
+                if not os.path.isfile(img_path):
+                    folder = col_cfg.get("image_config", {}).get("folder_path", "").strip()
+                    if not folder:
+                        t_idx = col_cfg.get("image_config", {}).get("trigger_index", 0)
+                        trigs = self.controller.data_manager.trigger_config.get("image_triggers", [])
+                        if 0 <= t_idx - 1 < len(trigs):
+                            folder = trigs[t_idx - 1].get("folder_path", "")
+                        elif trigs:
+                            folder = trigs[0].get("folder_path", "")
+                    if folder:
+                        img_path = os.path.join(folder, value)
+                
+                if os.path.isfile(img_path):
+                    self._show_image_zoom(img_path)
                     return
-                
-                # Cek apakah kolom ini tipe image
-                columns_config = self.controller.table_data.get("columns", [])
-                cfg_idx = col_idx
-                if 0 <= cfg_idx < len(columns_config):
-                    col_cfg = columns_config[cfg_idx]
-                    if isinstance(col_cfg, dict) and col_cfg.get("data_source") == "image":
-                        folder = col_cfg.get("image_config", {}).get("folder_path", "").strip()
-                        if not folder:
-                            t_idx = col_cfg.get("image_config", {}).get("trigger_index", 0)
-                            trigs = self.controller.data_manager.trigger_config.get("image_triggers", [])
-                            if 0 <= t_idx - 1 < len(trigs):
-                                folder = trigs[t_idx - 1].get("folder_path", "")
-                            elif trigs:
-                                folder = trigs[0].get("folder_path", "")
-                        
-                        import os
-                        img_path = os.path.join(folder, value) if folder else ""
-                        if img_path and os.path.isfile(img_path):
-                            if hasattr(os, 'startfile'):
-                                os.startfile(img_path)
-                            return
-                
-                # Fallback: search
-                self.search_var.set(value)
-                self._apply_search()
+        
+        # Fallback: use as search value
+        self.search_var.set(value)
+        self._apply_search()
+    
+    def _show_image_zoom(self, img_path):
+        """Show zoomed image in a centered popup window."""
+        import os
+        from PIL import Image, ImageTk
+        if not img_path or not os.path.isfile(img_path):
+            return
+        
+        zoom_win = tk.Toplevel(self)
+        zoom_win.title(f"🔍 {os.path.basename(img_path)}")
+        zoom_win.configure(bg="#0f0f0f")
+        zoom_win.attributes("-topmost", True)
+        
+        sw = zoom_win.winfo_screenwidth()
+        sh = zoom_win.winfo_screenheight()
+        max_w = int(sw * 0.85)
+        max_h = int(sh * 0.85)
+        
+        try:
+            img = Image.open(img_path)
+            img_w, img_h = img.size
+            scale = min(max_w / img_w, max_h / img_h, 1.0)
+            new_w = max(1, int(img_w * scale))
+            new_h = max(1, int(img_h * scale))
+            img = img.resize((new_w, new_h), Image.LANCZOS)
+            photo = ImageTk.PhotoImage(img)
+            
+            win_w = new_w + 20
+            win_h = new_h + 60
+            x = (sw - win_w) // 2
+            y = (sh - win_h) // 2
+            zoom_win.geometry(f"{win_w}x{win_h}+{x}+{y}")
+            
+            tk.Label(zoom_win, image=photo, bg="#0f0f0f").pack(pady=(10, 5))
+            zoom_win._photo = photo
+            
+            tk.Label(zoom_win, text=os.path.basename(img_path),
+                     font=("Segoe UI", 9), bg="#0f0f0f", fg="#aaaaaa").pack()
+            
+            tk.Button(zoom_win, text="✖ Close", font=("Segoe UI", 10),
+                      bg=self.colors["accent_red"], fg="#1e1e2e",
+                      relief="flat", cursor="hand2", padx=15,
+                      command=zoom_win.destroy).pack(pady=5)
+            
+            zoom_win.bind("<Escape>", lambda e: zoom_win.destroy())
+        except Exception as ex:
+            zoom_win.destroy()
+            print(f"[Zoom] {ex}")
+
     
     def _copy_selected_value(self):
         """Copy selected cell"""

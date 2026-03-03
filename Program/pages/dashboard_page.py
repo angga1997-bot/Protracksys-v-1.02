@@ -893,30 +893,35 @@ class DashboardPage(BasePage):
                 value = row_data[col_idx] if col_idx < len(row_data) else ""
                 
                 if source == "image" and value:
-                    folder = col.get("image_config", {}).get("folder_path", "").strip()
-                    if not folder:
-                        t_idx = col.get("image_config", {}).get("trigger_index", 0)
-                        trigs = self.controller.data_manager.trigger_config.get("image_triggers", [])
-                        if 0 <= t_idx - 1 < len(trigs):
-                            folder = trigs[t_idx - 1].get("folder_path", "")
-                        elif trigs:
-                            folder = trigs[0].get("folder_path", "")
-                            
-                    img_path = os.path.join(folder, str(value)) if folder else ""
+                    # Images are stored in CAPTURED_DIR after copy; fall back to source folder
+                    from config import CAPTURED_DIR
+                    img_path = os.path.join(CAPTURED_DIR, str(value))
+                    if not os.path.isfile(img_path):
+                        # fallback: look in the configured folder
+                        folder = col.get("image_config", {}).get("folder_path", "").strip()
+                        if not folder:
+                            t_idx = col.get("image_config", {}).get("trigger_index", 0)
+                            trigs = self.controller.data_manager.trigger_config.get("image_triggers", [])
+                            if 0 <= t_idx - 1 < len(trigs):
+                                folder = trigs[t_idx - 1].get("folder_path", "")
+                            elif trigs:
+                                folder = trigs[0].get("folder_path", "")
+                        if folder:
+                            img_path = os.path.join(folder, str(value))
                     if img_path and os.path.isfile(img_path):
                         try:
                             img = Image.open(img_path)
-                            img.thumbnail((50, 50))
+                            img.thumbnail((60, 60))
                             photo = ImageTk.PhotoImage(img)
                             self.photo_refs[f"r{row_idx}_c{col_idx}"] = photo
-                            
+                            final_path = img_path
                             btn = tk.Button(inner, image=photo, bg=bg, activebackground=self.colors["bg_hover"],
                                             relief="flat", cursor="hand2",
-                                            command=lambda p=img_path: os.startfile(p) if hasattr(os, 'startfile') else None)
+                                            command=lambda p=final_path: self._show_image_zoom(p))
                             btn.grid(row=row_idx + 1, column=col_idx + 1, padx=1, pady=1, sticky="nsew")
                             continue
-                        except:
-                            pass
+                        except Exception as e:
+                            print(f"[ImageRender] {e}")
                 
                 tk.Label(inner, text=str(value), font=("Segoe UI", 9),
                         bg=bg, fg=self.colors["text_primary"],
@@ -1084,6 +1089,57 @@ class DashboardPage(BasePage):
         self._create_table()
         self._update_summary_breakdown()
     
+    def _show_image_zoom(self, img_path):
+        """Show zoomed image in a centered popup window."""
+        if not img_path or not os.path.isfile(img_path):
+            return
+        
+        zoom_win = tk.Toplevel(self)
+        zoom_win.title(f"🔍 {os.path.basename(img_path)}")
+        zoom_win.configure(bg="#0f0f0f")
+        zoom_win.attributes("-topmost", True)
+        
+        # Determine max size
+        sw = zoom_win.winfo_screenwidth()
+        sh = zoom_win.winfo_screenheight()
+        max_w = int(sw * 0.85)
+        max_h = int(sh * 0.85)
+        
+        try:
+            img = Image.open(img_path)
+            img_w, img_h = img.size
+            # Scale to fit screen
+            scale = min(max_w / img_w, max_h / img_h, 1.0)
+            new_w = max(1, int(img_w * scale))
+            new_h = max(1, int(img_h * scale))
+            img = img.resize((new_w, new_h), Image.LANCZOS)
+            photo = ImageTk.PhotoImage(img)
+            
+            win_w = new_w + 20
+            win_h = new_h + 60
+            x = (sw - win_w) // 2
+            y = (sh - win_h) // 2
+            zoom_win.geometry(f"{win_w}x{win_h}+{x}+{y}")
+            
+            tk.Label(zoom_win, image=photo, bg="#0f0f0f").pack(pady=(10, 5))
+            zoom_win._photo = photo  # keep reference
+            
+            tk.Label(zoom_win, text=os.path.basename(img_path),
+                     font=("Segoe UI", 9), bg="#0f0f0f", fg="#aaaaaa").pack()
+            
+            tk.Button(zoom_win, text="✖ Close", font=("Segoe UI", 10),
+                      bg=self.colors["accent_red"], fg="#1e1e2e",
+                      relief="flat", cursor="hand2", padx=15,
+                      command=zoom_win.destroy).pack(pady=5)
+            
+            # Close on click or Escape
+            zoom_win.bind("<Button-1>", lambda e: zoom_win.destroy())
+            zoom_win.bind("<Escape>", lambda e: zoom_win.destroy())
+            
+        except Exception as e:
+            zoom_win.destroy()
+            print(f"[Zoom] Error: {e}")
+
     # ================================================================
     # PLC TRIGGER MONITOR
     # ================================================================
@@ -1149,10 +1205,14 @@ class DashboardPage(BasePage):
                                       fg=self.colors["text_secondary"])
             return
         self._plc_client = PLCFinsClient(self.controller.plc_config)
+        self.plc_status.configure(text="PLC: 🟡 connecting…",
+                                  fg=self.colors["accent_yellow"])
+        # Run connect in background thread, post result back to UI thread
+        def _do_connect():
+            ok, msg = self._plc_client.connect()
+            self.after(0, lambda: self._on_monitor_connect(ok, msg))
         import threading as _t
-        _t.Thread(target=lambda: self.after(0,
-            lambda: self._on_monitor_connect(
-                *self._plc_client.connect())), daemon=True).start()
+        _t.Thread(target=_do_connect, daemon=True).start()
 
     def _on_monitor_connect(self, ok, msg):
         if not ok:
