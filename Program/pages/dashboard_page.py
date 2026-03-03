@@ -1064,7 +1064,198 @@ class DashboardPage(BasePage):
         self._update_summary_breakdown()
     
     # ================================================================
-    # PLC FUNCTIONS
+    # PLC TRIGGER MONITOR
+    # ================================================================
+
+    @staticmethod
+    def _words_to_ascii(words):
+        """Convert list of PLC uint16 words to ASCII string (stops at 0x00)."""
+        result = ""
+        for w in words:
+            hi = (w >> 8) & 0xFF
+            lo = w & 0xFF
+            if hi == 0:
+                break
+            result += chr(hi) if 0x20 <= hi <= 0x7E else "?"
+            if lo == 0:
+                break
+            result += chr(lo) if 0x20 <= lo <= 0x7E else "?"
+        return result.strip()
+
+    def _extract_plc_value(self, cfg, plc_data):
+        """Extract one column value from plc_data dict. Supports 'word' and 'ascii' formats."""
+        key   = f"{cfg['area_type']}_{cfg['start_address']}_{cfg['length']}"
+        words = plc_data.get(key, [])
+        if not words:
+            return "N/A"
+        idx = cfg.get("data_index", 0)
+        if cfg.get("data_format", "word") == "ascii":
+            n = cfg.get("ascii_length", 1)
+            slc = words[idx: idx + n] if idx < len(words) else []
+            return self._words_to_ascii(slc) if slc else "N/A"
+        else:
+            return str(words[idx]) if 0 <= idx < len(words) else "N/A"
+
+    def _capture_image_for_column(self, col):
+        """Capture latest image for an 'image' column. Returns filename or empty string."""
+        from utils.image_capture import ImageCapture
+        img_cfg = col.get("image_config") or {}
+        folder  = img_cfg.get("folder_path", "").strip()
+        if not folder:
+            t_idx = img_cfg.get("trigger_index", 0)
+            trigs = self.controller.data_manager.trigger_config.get("image_triggers", [])
+            if 0 <= t_idx - 1 < len(trigs):
+                folder = trigs[t_idx - 1].get("folder_path", "")
+            elif trigs:
+                folder = trigs[0].get("folder_path", "")
+        if not folder or not os.path.isdir(folder):
+            print(f"[ImageCapture] Folder not found: {folder!r}")
+            return ""
+        cap = ImageCapture()
+        ok, result = cap.capture_and_copy(folder, prefix="IMG")
+        if ok:
+            print(f"[ImageCapture] Saved: {result}")
+            return os.path.basename(result)
+        print(f"[ImageCapture] Failed: {result}")
+        return ""
+
+    def _start_trigger_monitor(self):
+        """Start (or restart) PLC trigger monitor."""
+        self._stop_trigger_monitor()
+        trigger_cfg = self.controller.data_manager.trigger_config
+        if not trigger_cfg.get("enabled", False):
+            self.plc_status.configure(text="PLC: ⚪ (trigger off)",
+                                      fg=self.colors["text_secondary"])
+            return
+        self._plc_client = PLCFinsClient(self.controller.plc_config)
+        import threading as _t
+        _t.Thread(target=lambda: self.after(0,
+            lambda: self._on_monitor_connect(
+                *self._plc_client.connect())), daemon=True).start()
+
+    def _on_monitor_connect(self, ok, msg):
+        if not ok:
+            self.plc_status.configure(text="PLC: 🔴", fg=self.colors["accent_red"])
+            print(f"[TriggerMonitor] Connect failed: {msg}")
+            self.after(10000, self._start_trigger_monitor)
+            return
+        self.plc_status.configure(text="PLC: 🟢 (trigger on)", fg=self.colors["accent_green"])
+        print(f"[TriggerMonitor] {msg}")
+        trigger_cfg = self.controller.data_manager.trigger_config
+        self._trigger_monitor = TriggerMonitor(
+            plc_client=self._plc_client,
+            config=trigger_cfg,
+            callback=self._on_plc_trigger
+        )
+        self._trigger_monitor.start()
+
+    def _stop_trigger_monitor(self):
+        if self._trigger_monitor:
+            try: self._trigger_monitor.stop()
+            except Exception: pass
+            self._trigger_monitor = None
+        if self._plc_client:
+            try: self._plc_client.disconnect()
+            except Exception: pass
+            self._plc_client = None
+
+    def _on_plc_trigger(self, event):
+        """Relay trigger event to Tkinter main thread."""
+        self.after(0, lambda: self._handle_trigger_event(event))
+
+    def _handle_trigger_event(self, event):
+        """Dispatch trigger event on main thread."""
+        action      = event.get("action", "save_data")
+        trigger_key = event.get("trigger_key", "main")
+        img_cfg     = event.get("config")  # only set for image triggers
+        if trigger_key == "main" or action == "save_data":
+            self._read_plc_and_save_row(capture_images=True)
+        elif action == "capture_image" and img_cfg:
+            self._update_last_row_image(img_cfg)
+
+    def _read_plc_and_save_row(self, capture_images=True):
+        """Read PLC via a FRESH dedicated connection then insert a new row."""
+        columns = self.controller.table_data.get("columns", [])
+        # Collect unique read areas
+        areas = {}
+        for col in columns:
+            if isinstance(col, dict) and col.get("data_source") == "plc" and col.get("plc_config"):
+                cfg = col["plc_config"]
+                key = f"{cfg['area_type']}_{cfg['start_address']}_{cfg['length']}"
+                if key not in areas:
+                    areas[key] = cfg
+        plc_data = {}
+        if areas:
+            dc = PLCFinsClient(self.controller.plc_config)
+            ok, msg = dc.connect()
+            if ok:
+                for key, cfg in areas.items():
+                    rd_ok, data = dc.read_memory(cfg["area_type"], cfg["start_address"], cfg["length"])
+                    plc_data[key] = data if rd_ok else []
+                    if not rd_ok:
+                        print(f"[Trigger] read_memory failed {key}: {data}")
+                dc.disconnect()
+            else:
+                print(f"[Trigger] Data connection failed: {msg}")
+        # Build row
+        new_row = []
+        for col in columns:
+            if not isinstance(col, dict):
+                new_row.append("")
+                continue
+            source = col.get("data_source", "manual")
+            if source == "auto_number":
+                new_row.append(self._generate_auto_number())
+            elif source == "auto_date":
+                new_row.append(datetime.now().strftime("%Y-%m-%d"))
+            elif source == "auto_time":
+                new_row.append(datetime.now().strftime("%H:%M:%S"))
+            elif source == "plc" and col.get("plc_config"):
+                new_row.append(self._extract_plc_value(col["plc_config"], plc_data))
+            elif source == "image":
+                new_row.append(self._capture_image_for_column(col) if capture_images else "")
+            else:
+                new_row.append("")
+        self.controller.table_data["rows"].append(new_row)
+        self.controller.save_table_data()
+        self.current_page = 0
+        self._refresh_table()
+        self._update_id_displays()
+        self._update_summary_breakdown()
+        NotificationToast.show(self, "⚡ PLC Trigger: Data Saved")
+        print(f"[Trigger] Row inserted at {datetime.now().strftime('%H:%M:%S')}")
+
+    def _update_last_row_image(self, img_trigger_cfg):
+        """Image trigger: capture image and update last row's image column."""
+        rows    = self.controller.table_data.get("rows", [])
+        columns = self.controller.table_data.get("columns", [])
+        if not rows:
+            return
+        folder = img_trigger_cfg.get("folder_path", "").strip()
+        if not folder or not os.path.isdir(folder):
+            print(f"[ImageTrigger] Folder not found: {folder!r}")
+            return
+        from utils.image_capture import ImageCapture
+        cap = ImageCapture()
+        ok, result = cap.capture_and_copy(folder, prefix="TRIG")
+        if not ok:
+            print(f"[ImageTrigger] Failed: {result}")
+            return
+        filename = os.path.basename(result)
+        last_row = rows[-1]
+        for idx, col in enumerate(columns):
+            if isinstance(col, dict) and col.get("data_source") == "image":
+                while len(last_row) <= idx:
+                    last_row.append("")
+                last_row[idx] = filename
+                break
+        self.controller.save_table_data()
+        self._refresh_table()
+        NotificationToast.show(self, f"📷 Image: {filename}")
+        print(f"[ImageTrigger] {filename} saved to last row")
+
+    # ================================================================
+    # PLC FUNCTIONS (manual 'PLC Read' button)
     # ================================================================
     
     def _read_plc_data(self):
@@ -1116,35 +1307,30 @@ class DashboardPage(BasePage):
             messagebox.showerror("Error", msg)
     
     def _add_row_from_plc(self):
+        """Build a row from already-read self.plc_data and insert it."""
         columns = self.controller.table_data.get("columns", [])
-        new_row = []
-        
+        new_row  = []
+
         for col in columns:
-            if isinstance(col, dict):
-                source = col.get("data_source", "manual")
-                
-                if source == "auto_number":
-                    new_row.append(self._generate_auto_number())
-                elif source == "auto_date":
-                    new_row.append(datetime.now().strftime("%Y-%m-%d"))
-                elif source == "auto_time":
-                    new_row.append(datetime.now().strftime("%H:%M:%S"))
-                elif source == "plc" and col.get("plc_config"):
-                    cfg = col["plc_config"]
-                    key = f"{cfg['area_type']}_{cfg['start_address']}_{cfg['length']}"
-                    if key in self.plc_data:
-                        idx = cfg.get("data_index", 0)
-                        if 0 <= idx < len(self.plc_data[key]):
-                            new_row.append(str(self.plc_data[key][idx]))
-                        else:
-                            new_row.append("N/A")
-                    else:
-                        new_row.append("N/A")
-                else:
-                    new_row.append("")
+            if not isinstance(col, dict):
+                new_row.append("")
+                continue
+
+            source = col.get("data_source", "manual")
+
+            if source == "auto_number":
+                new_row.append(self._generate_auto_number())
+            elif source == "auto_date":
+                new_row.append(datetime.now().strftime("%Y-%m-%d"))
+            elif source == "auto_time":
+                new_row.append(datetime.now().strftime("%H:%M:%S"))
+            elif source == "plc" and col.get("plc_config"):
+                new_row.append(self._extract_plc_value(col["plc_config"], self.plc_data))
+            elif source == "image":
+                new_row.append(self._capture_image_for_column(col))
             else:
                 new_row.append("")
-        
+
         self.controller.table_data["rows"].append(new_row)
         self.controller.save_table_data()
         self.current_page = 0

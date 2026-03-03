@@ -558,34 +558,51 @@ class PLCSettingsPage(BasePage):
         threading.Thread(target=do_read, daemon=True).start()
     
     def _on_read_complete(self, success, message, results):
-        """Callback after read complete"""
+        """Callback after read complete - shows full table with hex + ASCII"""
         self.read_btn.configure(state="normal")
-        
+
         if not success:
             self._update_status(f"❌ {message}", "accent_red")
             self._update_result(f"❌ Read Test Failed!\n\nError: {message}")
             return
-        
-        # Format results
+
         output = "📖 PLC Data Reading Results:\n"
-        output += "=" * 50 + "\n\n"
-        
+        output += "=" * 65 + "\n\n"
+
         for r in results:
             area = r["area"]
-            output += f"📍 {area['name']} ({area['area_type']}{area['start_address']})\n"
-            output += f"   Length: {area['length']} words\n"
-            
-            if r["success"]:
-                output += f"   ✅ Status: OK\n"
-                data_str = str(r['data'])
-                if len(data_str) > 50:
-                    data_str = data_str[:50] + "..."
-                output += f"   📊 Data: {data_str}\n"
-            else:
-                output += f"   ❌ Error: {r['data']}\n"
-            
+            output += (f"📍 {area['name']}  |  "
+                       f"{area['area_type']} {area['start_address']}  |  "
+                       f"Length: {area['length']} words\n")
+
+            if not r["success"]:
+                output += f"   ❌ Error: {r['data']}\n\n"
+                continue
+
+            words = r["data"]
+            if not isinstance(words, (list, tuple)):
+                output += f"   ❌ Unexpected data type: {type(words)}\n\n"
+                continue
+
+            output += f"   ✅ OK — {len(words)} word(s) received\n"
+            output += f"   {'Addr':<8} {'Dec':>6}  {'Hex':>6}  {'ASCII':>5}\n"
+            output += "   " + "-" * 40 + "\n"
+
+            base = area["start_address"]
+            for i, w in enumerate(words):
+                addr = base + i
+                # ASCII: high byte → char1, low byte → char2
+                hi = (w >> 8) & 0xFF
+                lo = w & 0xFF
+                c1 = chr(hi) if 0x20 <= hi <= 0x7E else "."
+                c2 = chr(lo) if 0x20 <= lo <= 0x7E else "."
+                ascii_str = c1 + c2
+                output += f"   {area['area_type']}{addr:<5}  {w:>6}  0x{w:04X}   {ascii_str}\n"
+
             output += "\n"
-        
+
+        self._update_status(f"✅ Read OK — {sum(len(r['data']) if r['success'] and isinstance(r['data'], list) else 0 for r in results)} word(s) total",
+                            "accent_green")
         self._update_result(output)
     
     def _save_config(self):
