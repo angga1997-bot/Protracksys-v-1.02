@@ -1299,14 +1299,6 @@ class DashboardPage(BasePage):
         self.plc_status.configure(text="PLC: 🟡", fg=self.colors["accent_yellow"])
         
         def do_read():
-            plc_config = self.controller.plc_config
-            client = PLCFinsClient(plc_config)
-            
-            success, msg = client.connect()
-            if not success:
-                self.after(0, lambda: self._on_plc_complete(False, msg, {}))
-                return
-            
             areas = {}
             for col in self.controller.table_data.get("columns", []):
                 if isinstance(col, dict) and col.get("data_source") == "plc" and col.get("plc_config"):
@@ -1315,12 +1307,31 @@ class DashboardPage(BasePage):
                     if key not in areas:
                         areas[key] = cfg
             
+            client = getattr(self, "_plc_client", None)
+            must_disconnect = False
+            ok = False
+            msg = ""
+            
+            if not client or not client.connected:
+                # Need to spin up a manual connection
+                client = PLCFinsClient(self.controller.plc_config)
+                ok, msg = client.connect()
+                must_disconnect = True
+            else:
+                ok = True
+                
+            if not ok:
+                self.after(0, lambda: self._on_plc_complete(False, msg, {}))
+                return
+            
             plc_data = {}
             for key, cfg in areas.items():
-                ok, data = client.read_memory(cfg["area_type"], cfg["start_address"], cfg["length"])
-                plc_data[key] = data if ok else []
+                rd_ok, data = client.read_memory(cfg["area_type"], cfg["start_address"], cfg["length"])
+                plc_data[key] = data if rd_ok else []
             
-            client.disconnect()
+            if must_disconnect:
+                client.disconnect()
+                
             self.after(0, lambda: self._on_plc_complete(True, "OK", plc_data))
         
         threading.Thread(target=do_read, daemon=True).start()

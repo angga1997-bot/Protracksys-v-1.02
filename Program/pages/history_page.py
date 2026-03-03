@@ -758,14 +758,14 @@ class HistoryPage(BasePage):
             col_idx = int(column.replace("#", "")) - 1
             values = self.tree.item(item, 'values')
             
-            if 0 < col_idx < len(values):
+            if 0 <= col_idx < len(values):
                 value = str(values[col_idx])
                 if not value:
                     return
                 
                 # Cek apakah kolom ini tipe image
                 columns_config = self.controller.table_data.get("columns", [])
-                cfg_idx = col_idx - 1
+                cfg_idx = col_idx
                 if 0 <= cfg_idx < len(columns_config):
                     col_cfg = columns_config[cfg_idx]
                     if isinstance(col_cfg, dict) and col_cfg.get("data_source") == "image":
