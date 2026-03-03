@@ -56,7 +56,7 @@ def show_splash(root):
 
 def main():
     # Create the main app as the single Tk root (but keep it hidden)
-    app = ()
+    app = AppController()
     app.withdraw()
 
     # Global MouseWheel handler for the entire application (scrolls canvas under cursor)
