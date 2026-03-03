@@ -59,6 +59,24 @@ def main():
     app = AppController()
     app.withdraw()
 
+    # Global MouseWheel handler for the entire application (scrolls canvas under cursor)
+    def _global_mouse_wheel(event):
+        try:
+            widget = event.widget.winfo_containing(event.x_root, event.y_root)
+        except Exception:
+            return
+            
+        while widget:
+            if isinstance(widget, tk.Canvas):
+                try:
+                    widget.yview_scroll(int(-1 * (event.delta / 120)), "units")
+                except Exception:
+                    pass
+                break
+            widget = getattr(widget, "master", None)
+
+    app.bind_all("<MouseWheel>", _global_mouse_wheel)
+
     # Show splash as Toplevel on top of the hidden main window
     splash = show_splash(app)
     app.update()

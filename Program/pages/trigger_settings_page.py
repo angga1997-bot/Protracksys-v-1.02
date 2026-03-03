@@ -47,8 +47,7 @@ class TriggerSettingsPage(BasePage):
         # Save button
         self._create_save_button(scroll_frame)
         
-        # Mouse wheel
-        canvas.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(int(-1 * (e.delta / 120)), "units"))
+        # MouseWheel handled globally in main.py
     
     def _create_info_section(self, parent):
         """Info section"""

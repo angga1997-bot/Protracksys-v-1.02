@@ -45,8 +45,7 @@ class TableSettingsPage(BasePage):
         # Save button
         self._create_save_button(self.scroll_frame)
         
-        # Mouse wheel
-        self.canvas.bind_all("<MouseWheel>", lambda e: self.canvas.yview_scroll(int(-1 * (e.delta / 120)), "units"))
+        # MouseWheel handled globally in main.py
     
     def _create_info_section(self, parent):
         """Info section"""

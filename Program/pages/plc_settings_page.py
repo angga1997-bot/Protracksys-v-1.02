@@ -43,10 +43,7 @@ class PLCSettingsPage(BasePage):
         self._create_test_section(scroll_frame)
         self._create_save_button(scroll_frame)
         
-        # Mouse wheel
-        def on_mousewheel(event):
-            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-        canvas.bind_all("<MouseWheel>", on_mousewheel)
+        # MouseWheel handled globally in main.py
     
     def _create_connection_section(self, parent):
         """Creates connection section"""

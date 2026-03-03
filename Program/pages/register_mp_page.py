@@ -105,8 +105,7 @@ class RegisterMPPage(BasePage):
         self.member_frame.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
         self.canvas.bind("<Configure>", configure_scroll)
         
-        # Mouse wheel
-        self.canvas.bind_all("<MouseWheel>", lambda e: self.canvas.yview_scroll(int(-1 * (e.delta / 120)), "units"))
+        # MouseWheel handled globally in main.py
     
     def _load_members(self, filter_text=""):
         """Load dan tampilkan daftar member"""

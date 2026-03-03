@@ -744,12 +744,7 @@ class DashboardPage(BasePage):
                      bg=self.colors["accent_purple"], fg="#1e1e2e", padx=15, pady=10
             ).grid(row=total_row, column=2, sticky="nsew", padx=(1, 0), pady=(3, 0))
         
-        # Mouse wheel scroll
-        def on_mousewheel(event):
-            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-        
-        canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", on_mousewheel))
-        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
+        # MouseWheel handled globally in main.py
     
     def _format_number(self, value):
         if isinstance(value, float) and value == int(value):
@@ -905,8 +900,7 @@ class DashboardPage(BasePage):
             tk.Label(inner, text="📭 No data available", font=("Segoe UI", 11),
                      bg=self.colors["bg_card"], fg=self.colors["text_secondary"], pady=30
             ).grid(row=1, column=0, columnspan=len(columns) + 1, sticky="nsew")
-        
-        canvas.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(int(-1 * (e.delta / 120)), "units"))
+        # MouseWheel handled globally in main.py
     
     def _create_pagination_controls(self, total_pages):
         pag_frame = tk.Frame(self.table_frame, bg=self.colors["bg_card"])
