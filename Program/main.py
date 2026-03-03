@@ -76,6 +76,7 @@ def main():
             widget = getattr(widget, "master", None)
 
     app.bind_all("<MouseWheel>", _global_mouse_wheel)
+    
 
     # Show splash as Toplevel on top of the hidden main window
     splash = show_splash(app)
