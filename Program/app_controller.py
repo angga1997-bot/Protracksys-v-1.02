@@ -172,7 +172,8 @@ class AppController(tk.Tk):
         """Handle trigger event — dispatched on the Tkinter main thread."""
         action      = event.get("action", "save_data")
         trigger_key = event.get("trigger_key", "main")
-        img_cfg     = event.get("config")   # only set for image triggers
+        img_cfg     = event.get("config")           # only set for image triggers
+        trigger_time = event.get("timestamp")       # datetime when trigger fired
 
         dashboard = self.pages.get("dashboard")
         if not dashboard:
@@ -185,8 +186,18 @@ class AppController(tk.Tk):
             dashboard._read_plc_and_save_row(capture_images=True)
 
         elif action == "capture_image" and img_cfg:
-            print(f"[GlobalTrigger] Image trigger → capturing image")
-            dashboard._update_last_row_image(img_cfg)
+            # trigger_key is like "image_0", "image_1", ...
+            try:
+                trigger_index = int(trigger_key.split("_")[1])  # 0-based
+            except (IndexError, ValueError):
+                trigger_index = 0
+            print(f"[GlobalTrigger] Image trigger {trigger_index} → capturing image")
+            dashboard._update_last_row_image(
+                img_cfg,
+                trigger_index=trigger_index,
+                trigger_time=trigger_time
+            )
+
 
     def _update_plc_status(self, text, color_key):
         """Update PLC status label on dashboard if visible."""

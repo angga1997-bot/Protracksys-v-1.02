@@ -1178,27 +1178,35 @@ class DashboardPage(BasePage):
         else:
             return str(words[idx]) if 0 <= idx < len(words) else "N/A"
 
-    def _capture_image_for_column(self, col):
-        """Capture latest image for an 'image' column. Returns filename or empty string."""
+    def _capture_image_for_column(self, col, trigger_time=None):
+        """Capture latest FRESH image (newer than trigger_time) for an 'image' column.
+        trigger_time: datetime when trigger fired. If None, uses now."""
         from utils.image_capture import ImageCapture
+        import time as _time
+        
         img_cfg = col.get("image_config") or {}
         folder  = img_cfg.get("folder_path", "").strip()
+        t_idx   = img_cfg.get("trigger_index", 0)
+        
         if not folder:
-            t_idx = img_cfg.get("trigger_index", 0)
             trigs = self.controller.data_manager.trigger_config.get("image_triggers", [])
             if 0 <= t_idx - 1 < len(trigs):
                 folder = trigs[t_idx - 1].get("folder_path", "")
             elif trigs:
                 folder = trigs[0].get("folder_path", "")
+        
         if not folder or not os.path.isdir(folder):
             print(f"[ImageCapture] Folder not found: {folder!r}")
             return ""
+        
+        # Only grab images that appeared AFTER the trigger fired
+        since_ts = trigger_time.timestamp() if trigger_time else (_time.time() - 2)
         cap = ImageCapture()
-        ok, result = cap.capture_and_copy(folder, prefix="IMG")
+        ok, result = cap.capture_and_copy(folder, prefix="IMG", since_timestamp=since_ts)
         if ok:
             print(f"[ImageCapture] Saved: {result}")
             return os.path.basename(result)
-        print(f"[ImageCapture] Failed: {result}")
+        print(f"[ImageCapture] No new image: {result}")
         return ""
 
     def _on_plc_trigger(self, event):
@@ -1273,34 +1281,68 @@ class DashboardPage(BasePage):
         NotificationToast.show(self, "⚡ PLC Trigger: Data Saved")
         print(f"[Trigger] Row inserted at {datetime.now().strftime('%H:%M:%S')}")
 
-    def _update_last_row_image(self, img_trigger_cfg):
-        """Image trigger: capture image and update last row's image column."""
+    def _update_last_row_image(self, img_trigger_cfg, trigger_index=None, trigger_time=None):
+        """Image trigger fired: capture fresh image and update the matching image column.
+        
+        Args:
+            img_trigger_cfg: The image trigger settings dict (has folder_path, etc.)
+            trigger_index:   0-based index of the image trigger (0=first, 1=second...)
+            trigger_time:    datetime when trigger fired (for fresh-image filtering)
+        """
+        import time as _time
         rows    = self.controller.table_data.get("rows", [])
         columns = self.controller.table_data.get("columns", [])
         if not rows:
+            print("[ImageTrigger] No rows in table — skipping image capture")
             return
+        
         folder = img_trigger_cfg.get("folder_path", "").strip()
         if not folder or not os.path.isdir(folder):
             print(f"[ImageTrigger] Folder not found: {folder!r}")
             return
+        
+        # Only grab images newer than trigger fire time
+        since_ts = trigger_time.timestamp() if trigger_time else (_time.time() - 2)
+        
         from utils.image_capture import ImageCapture
         cap = ImageCapture()
-        ok, result = cap.capture_and_copy(folder, prefix="TRIG")
+        ok, result = cap.capture_and_copy(folder, prefix="TRIG", since_timestamp=since_ts)
         if not ok:
-            print(f"[ImageTrigger] Failed: {result}")
+            print(f"[ImageTrigger] No fresh image: {result}")
             return
         filename = os.path.basename(result)
+        
+        # Match this trigger to the correct image column.
+        # trigger_index 0 → 1st image column, trigger_index 1 → 2nd image column, etc.
         last_row = rows[-1]
-        for idx, col in enumerate(columns):
+        match_count = -1
+        matched_idx = None
+        
+        for col_idx, col in enumerate(columns):
             if isinstance(col, dict) and col.get("data_source") == "image":
-                while len(last_row) <= idx:
-                    last_row.append("")
-                last_row[idx] = filename
-                break
+                match_count += 1
+                col_t_idx = col.get("image_config", {}).get("trigger_index", 1) - 1  # convert 1-based to 0-based
+                # Match by trigger_index; fallback to positional order
+                if trigger_index is not None:
+                    if col_t_idx == trigger_index:
+                        matched_idx = col_idx
+                        break
+                else:
+                    matched_idx = col_idx  # fallback: first image column
+                    break
+        
+        if matched_idx is None:
+            print(f"[ImageTrigger] No image column matched for trigger_index={trigger_index}")
+            return
+        
+        while len(last_row) <= matched_idx:
+            last_row.append("")
+        last_row[matched_idx] = filename
+        
         self.controller.save_table_data()
         self._refresh_table()
         NotificationToast.show(self, f"📷 Image: {filename}")
-        print(f"[ImageTrigger] {filename} saved to last row")
+        print(f"[ImageTrigger] idx={trigger_index} → col={matched_idx}: {filename}")
 
     # ================================================================
     # PLC FUNCTIONS (manual 'PLC Read' button)

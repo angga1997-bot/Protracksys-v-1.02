@@ -15,12 +15,14 @@ class ImageCapture:
         self.captured_dir = CAPTURED_DIR
         os.makedirs(self.captured_dir, exist_ok=True)
     
-    def get_latest_image(self, folder_path):
+    def get_latest_image(self, folder_path, since_timestamp=None):
         """
         Mendapatkan gambar terbaru dari folder
         
         Args:
             folder_path: Path ke folder gambar
+            since_timestamp: Only return images with mtime >= this value (unix timestamp).
+                             If None, returns the overall newest image.
             
         Returns:
             tuple: (success, file_path or error_message)
@@ -36,11 +38,15 @@ class ImageCapture:
                 if ext in IMAGE_EXTENSIONS:
                     full_path = os.path.join(folder_path, file)
                     if os.path.isfile(full_path):
-                        # Get modification time
                         mtime = os.path.getmtime(full_path)
+                        # Filter: only fresh images if since_timestamp given
+                        if since_timestamp is not None and mtime < since_timestamp:
+                            continue
                         image_files.append((full_path, mtime))
             
             if not image_files:
+                if since_timestamp is not None:
+                    return False, "Tidak ada gambar baru sejak trigger"
                 return False, "Tidak ada file gambar di folder"
             
             # Sort by modification time (newest first)
@@ -53,18 +59,19 @@ class ImageCapture:
         except Exception as e:
             return False, f"Error: {str(e)}"
     
-    def capture_and_copy(self, source_folder, prefix="IMG"):
+    def capture_and_copy(self, source_folder, prefix="IMG", since_timestamp=None):
         """
-        Ambil gambar terbaru dan copy ke folder captured
+        Ambil gambar terbaru (fresh) dan copy ke folder captured
         
         Args:
             source_folder: Folder sumber gambar
             prefix: Prefix untuk nama file baru
+            since_timestamp: Only accept images with mtime >= this (unix timestamp)
             
         Returns:
             tuple: (success, new_file_path or error_message)
         """
-        success, result = self.get_latest_image(source_folder)
+        success, result = self.get_latest_image(source_folder, since_timestamp=since_timestamp)
         
         if not success:
             return False, result
@@ -83,6 +90,7 @@ class ImageCapture:
             
         except Exception as e:
             return False, f"Error copying: {str(e)}"
+
     
     def get_image_info(self, image_path):
         """Mendapatkan info gambar"""
