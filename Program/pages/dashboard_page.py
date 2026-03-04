@@ -40,6 +40,10 @@ class DashboardPage(BasePage):
         self._plc_client = None
         self._trigger_monitor = None   # kept for compatibility, not used
         
+        # Track last captured image per folder (path -> filename)
+        # so we can detect when a NEW image has arrived
+        self._last_captured_file = {}
+        
         self._create_widgets()
         self._update_clock()
     
@@ -1179,10 +1183,10 @@ class DashboardPage(BasePage):
             return str(words[idx]) if 0 <= idx < len(words) else "N/A"
 
     def _capture_image_for_column(self, col, trigger_time=None):
-        """Capture latest FRESH image (newer than trigger_time) for an 'image' column.
-        trigger_time: datetime when trigger fired. If None, uses now."""
+        """Capture the latest image for an 'image' column using last-used tracker.
+        Grabs the newest file in the folder; if it's new (different from last used),
+        copies it to CAPTURED_DIR. Always returns a result even if same file."""
         from utils.image_capture import ImageCapture
-        import time as _time
         
         img_cfg = col.get("image_config") or {}
         folder  = img_cfg.get("folder_path", "").strip()
@@ -1199,14 +1203,14 @@ class DashboardPage(BasePage):
             print(f"[ImageCapture] Folder not found: {folder!r}")
             return ""
         
-        # Only grab images that appeared AFTER the trigger fired
-        since_ts = trigger_time.timestamp() if trigger_time else (_time.time() - 2)
         cap = ImageCapture()
-        ok, result = cap.capture_and_copy(folder, prefix="IMG", since_timestamp=since_ts)
+        ok, result = cap.capture_and_copy(folder, prefix="IMG")
         if ok:
+            fname = os.path.basename(result)
+            self._last_captured_file[folder] = fname
             print(f"[ImageCapture] Saved: {result}")
-            return os.path.basename(result)
-        print(f"[ImageCapture] No new image: {result}")
+            return fname
+        print(f"[ImageCapture] No image in folder: {result}")
         return ""
 
     def _on_plc_trigger(self, event):
@@ -1282,18 +1286,20 @@ class DashboardPage(BasePage):
         print(f"[Trigger] Row inserted at {datetime.now().strftime('%H:%M:%S')}")
 
     def _update_last_row_image(self, img_trigger_cfg, trigger_index=None, trigger_time=None):
-        """Image trigger fired: capture fresh image and update the matching image column.
+        """Image trigger fired: capture latest image and update the matching column.
         
+        Uses last-used-file tracking so we detect NEW images without relying
+        on timestamps (camera may save image BEFORE PLC bit goes ON).
+
         Args:
-            img_trigger_cfg: The image trigger settings dict (has folder_path, etc.)
+            img_trigger_cfg: The image trigger settings dict (folder_path, etc.)
             trigger_index:   0-based index of the image trigger (0=first, 1=second...)
-            trigger_time:    datetime when trigger fired (for fresh-image filtering)
+            trigger_time:    unused, kept for API compatibility
         """
-        import time as _time
         rows    = self.controller.table_data.get("rows", [])
         columns = self.controller.table_data.get("columns", [])
         if not rows:
-            print("[ImageTrigger] No rows in table — skipping image capture")
+            print("[ImageTrigger] No rows in table — skipping")
             return
         
         folder = img_trigger_cfg.get("folder_path", "").strip()
@@ -1301,28 +1307,45 @@ class DashboardPage(BasePage):
             print(f"[ImageTrigger] Folder not found: {folder!r}")
             return
         
-        # Only grab images newer than trigger fire time
-        since_ts = trigger_time.timestamp() if trigger_time else (_time.time() - 2)
-        
         from utils.image_capture import ImageCapture
         cap = ImageCapture()
-        ok, result = cap.capture_and_copy(folder, prefix="TRIG", since_timestamp=since_ts)
+        
+        # Get the newest image in the source folder (no timestamp filter)
+        ok, src_path = cap.get_latest_image(folder)
         if not ok:
-            print(f"[ImageTrigger] No fresh image: {result}")
+            print(f"[ImageTrigger] No image found: {src_path}")
             return
-        filename = os.path.basename(result)
         
-        # Match this trigger to the correct image column.
-        # trigger_index 0 → 1st image column, trigger_index 1 → 2nd image column, etc.
+        src_name = os.path.basename(src_path)
+        last_used = self._last_captured_file.get(folder, "")
+        
+        if src_name == last_used:
+            print(f"[ImageTrigger] Same image as before ({src_name}) — still capturing")
+        else:
+            print(f"[ImageTrigger] New image detected: {src_name}")
+        
+        # Always copy it (even if same file — trigger means 'take a photo NOW')
+        import shutil
+        from datetime import datetime as _dt
+        from config import CAPTURED_DIR
+        ext = os.path.splitext(src_name)[1]
+        new_name = f"TRIG_{_dt.now().strftime('%Y%m%d_%H%M%S_%f')}{ext}"
+        dest_path = os.path.join(CAPTURED_DIR, new_name)
+        try:
+            shutil.copy2(src_path, dest_path)
+        except Exception as ex:
+            print(f"[ImageTrigger] Copy failed: {ex}")
+            return
+        
+        self._last_captured_file[folder] = src_name
+        filename = new_name
+        
+        # Match this trigger to the correct image column by trigger_index
         last_row = rows[-1]
-        match_count = -1
         matched_idx = None
-        
         for col_idx, col in enumerate(columns):
             if isinstance(col, dict) and col.get("data_source") == "image":
-                match_count += 1
-                col_t_idx = col.get("image_config", {}).get("trigger_index", 1) - 1  # convert 1-based to 0-based
-                # Match by trigger_index; fallback to positional order
+                col_t_idx = col.get("image_config", {}).get("trigger_index", 1) - 1  # 1-based → 0-based
                 if trigger_index is not None:
                     if col_t_idx == trigger_index:
                         matched_idx = col_idx
