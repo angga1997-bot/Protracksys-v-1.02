@@ -35,6 +35,11 @@ class DashboardPage(BasePage):
         # Shift tracking
         self.last_shift = None
         
+        # _plc_client is shared from AppController's global trigger
+        # (AppController sets this before calling _read_plc_and_save_row)
+        self._plc_client = None
+        self._trigger_monitor = None   # kept for compatibility, not used
+        
         self._create_widgets()
         self._update_clock()
     
@@ -1196,63 +1201,14 @@ class DashboardPage(BasePage):
         print(f"[ImageCapture] Failed: {result}")
         return ""
 
-    def _start_trigger_monitor(self):
-        """Start (or restart) PLC trigger monitor."""
-        self._stop_trigger_monitor()
-        trigger_cfg = self.controller.data_manager.trigger_config
-        if not trigger_cfg.get("enabled", False):
-            self.plc_status.configure(text="PLC: ⚪ (trigger off)",
-                                      fg=self.colors["text_secondary"])
-            return
-        self._plc_client = PLCFinsClient(self.controller.plc_config)
-        self.plc_status.configure(text="PLC: 🟡 connecting…",
-                                  fg=self.colors["accent_yellow"])
-        # Run connect in background thread, post result back to UI thread
-        def _do_connect():
-            ok, msg = self._plc_client.connect()
-            self.after(0, lambda: self._on_monitor_connect(ok, msg))
-        import threading as _t
-        _t.Thread(target=_do_connect, daemon=True).start()
-
-    def _on_monitor_connect(self, ok, msg):
-        if not ok:
-            self.plc_status.configure(text="PLC: 🔴", fg=self.colors["accent_red"])
-            print(f"[TriggerMonitor] Connect failed: {msg}")
-            self.after(10000, self._start_trigger_monitor)
-            return
-        self.plc_status.configure(text="PLC: 🟢 (trigger on)", fg=self.colors["accent_green"])
-        print(f"[TriggerMonitor] {msg}")
-        trigger_cfg = self.controller.data_manager.trigger_config
-        self._trigger_monitor = TriggerMonitor(
-            plc_client=self._plc_client,
-            config=trigger_cfg,
-            callback=self._on_plc_trigger
-        )
-        self._trigger_monitor.start()
-
-    def _stop_trigger_monitor(self):
-        if self._trigger_monitor:
-            try: self._trigger_monitor.stop()
-            except Exception: pass
-            self._trigger_monitor = None
-        if self._plc_client:
-            try: self._plc_client.disconnect()
-            except Exception: pass
-            self._plc_client = None
-
     def _on_plc_trigger(self, event):
-        """Relay trigger event to Tkinter main thread."""
-        self.after(0, lambda: self._handle_trigger_event(event))
+        """Legacy stub — global trigger now handled by AppController."""
+        pass
 
     def _handle_trigger_event(self, event):
-        """Dispatch trigger event on main thread."""
-        action      = event.get("action", "save_data")
-        trigger_key = event.get("trigger_key", "main")
-        img_cfg     = event.get("config")  # only set for image triggers
-        if trigger_key == "main" or action == "save_data":
-            self._read_plc_and_save_row(capture_images=True)
-        elif action == "capture_image" and img_cfg:
-            self._update_last_row_image(img_cfg)
+        """Legacy stub — global trigger now handled by AppController."""
+        pass
+
 
     def _read_plc_and_save_row(self, capture_images=True):
         """Read PLC via a FRESH dedicated connection then insert a new row."""

@@ -142,6 +142,10 @@ class DataManager:
         with open(self.trigger_file, "w", encoding="utf-8") as f:
             json.dump(self.trigger_config, f, indent=4, ensure_ascii=False)
     
+    def reload_trigger_config(self):
+        """Reload trigger config from disk (call after saving new config)."""
+        self.trigger_config = self._load_trigger_config()
+    
     # ===== MP Register Methods =====
     
     def add_member(self, id_number, name, photo_path=None):
