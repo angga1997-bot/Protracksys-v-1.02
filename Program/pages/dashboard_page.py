@@ -40,9 +40,11 @@ class DashboardPage(BasePage):
         self._plc_client = None
         self._trigger_monitor = None   # kept for compatibility, not used
         
-        # Track last captured image per folder (path -> filename)
-        # so we can detect when a NEW image has arrived
-        self._last_captured_file = {}
+        # Buffer: image triggers store captured file here BEFORE main trigger fires.
+        # Key = trigger_index (0-based int), Value = copied filename in CAPTURED_DIR
+        # Main trigger reads this buffer when inserting a new row, then clears it.
+        self._pending_images = {}          # {trigger_index: filename}
+        self._last_captured_file = {}      # {folder_path: source_filename} for dedup
         
         self._create_widgets()
         self._update_clock()
@@ -901,36 +903,56 @@ class DashboardPage(BasePage):
                 source = col.get("data_source", "manual") if isinstance(col, dict) else "manual"
                 value = row_data[col_idx] if col_idx < len(row_data) else ""
                 
-                if source == "image" and value:
-                    # Images are stored in CAPTURED_DIR after copy; fall back to source folder
+                if source == "image":
                     from config import CAPTURED_DIR
-                    img_path = os.path.join(CAPTURED_DIR, str(value))
-                    if not os.path.isfile(img_path):
-                        # fallback: look in the configured folder
-                        folder = col.get("image_config", {}).get("folder_path", "").strip()
-                        if not folder:
-                            t_idx = col.get("image_config", {}).get("trigger_index", 0)
-                            trigs = self.controller.data_manager.trigger_config.get("image_triggers", [])
-                            if 0 <= t_idx - 1 < len(trigs):
-                                folder = trigs[t_idx - 1].get("folder_path", "")
-                            elif trigs:
-                                folder = trigs[0].get("folder_path", "")
-                        if folder:
-                            img_path = os.path.join(folder, str(value))
+                    img_path = ""
+                    if value:
+                        img_path = os.path.join(CAPTURED_DIR, str(value))
+                        if not os.path.isfile(img_path):
+                            folder = col.get("image_config", {}).get("folder_path", "").strip()
+                            if not folder:
+                                t_idx = col.get("image_config", {}).get("trigger_index", 0)
+                                trigs = self.controller.data_manager.trigger_config.get("image_triggers", [])
+                                if 0 <= t_idx - 1 < len(trigs):
+                                    folder = trigs[t_idx - 1].get("folder_path", "")
+                                elif trigs:
+                                    folder = trigs[0].get("folder_path", "")
+                            if folder:
+                                img_path = os.path.join(folder, str(value))
+                    
+                    # Cell frame holds thumbnail + edit button
+                    cell_frame = tk.Frame(inner, bg=bg)
+                    cell_frame.grid(row=row_idx + 1, column=col_idx + 1, padx=1, pady=1, sticky="nsew")
+                    
                     if img_path and os.path.isfile(img_path):
                         try:
                             img = Image.open(img_path)
-                            img.thumbnail((60, 60))
+                            img.thumbnail((55, 55))
                             photo = ImageTk.PhotoImage(img)
                             self.photo_refs[f"r{row_idx}_c{col_idx}"] = photo
                             final_path = img_path
-                            btn = tk.Button(inner, image=photo, bg=bg, activebackground=self.colors["bg_hover"],
-                                            relief="flat", cursor="hand2",
-                                            command=lambda p=final_path: self._show_image_zoom(p))
-                            btn.grid(row=row_idx + 1, column=col_idx + 1, padx=1, pady=1, sticky="nsew")
-                            continue
+                            tk.Button(cell_frame, image=photo, bg=bg,
+                                      activebackground=self.colors["bg_hover"],
+                                      relief="flat", cursor="hand2",
+                                      command=lambda p=final_path: self._show_image_zoom(p)
+                            ).pack(side="left", padx=2, pady=2)
                         except Exception as e:
                             print(f"[ImageRender] {e}")
+                            tk.Label(cell_frame, text="⚠️", bg=bg).pack(side="left", padx=2)
+                    else:
+                        tk.Label(cell_frame, text="📷 Empty",
+                                 font=("Segoe UI", 8), bg=bg,
+                                 fg=self.colors["text_secondary"]
+                        ).pack(side="left", padx=5, pady=2)
+                    
+                    # ✏️ Edit button — lets user pick a new image for this cell
+                    tk.Button(
+                        cell_frame, text="✏️", font=("Segoe UI", 8),
+                        bg=bg, fg=self.colors["text_primary"],
+                        relief="flat", cursor="hand2",
+                        command=lambda ai=actual_idx, ci=col_idx: self._edit_image_cell(ai, ci)
+                    ).pack(side="left", padx=1, pady=2)
+                    continue
                 
                 tk.Label(inner, text=str(value), font=("Segoe UI", 9),
                         bg=bg, fg=self.colors["text_primary"],
@@ -1222,8 +1244,78 @@ class DashboardPage(BasePage):
         pass
 
 
+    def _edit_image_cell(self, row_idx, col_idx):
+        """Allow user to pick a new image file for a cell or clear it."""
+        from tkinter import filedialog
+        from config import CAPTURED_DIR
+        import shutil
+        
+        popup = tk.Toplevel(self)
+        popup.title("Edit Image")
+        popup.configure(bg=self.colors["bg_card"])
+        popup.geometry("320x140")
+        popup.transient(self)
+        popup.grab_set()
+        # Center
+        popup.update_idletasks()
+        x = self.winfo_rootx() + (self.winfo_width() - 320) // 2
+        y = self.winfo_rooty() + (self.winfo_height() - 140) // 2
+        popup.geometry(f"+{x}+{y}")
+        
+        tk.Label(popup, text="Replace or clear the image for this cell",
+                 font=("Segoe UI", 10), bg=self.colors["bg_card"],
+                 fg=self.colors["text_primary"]).pack(pady=(15, 10))
+        
+        btn_row = tk.Frame(popup, bg=self.colors["bg_card"])
+        btn_row.pack()
+        
+        def _browse():
+            path = filedialog.askopenfilename(
+                title="Select Image",
+                filetypes=[("Image files", "*.jpg *.jpeg *.png *.bmp *.gif *.tiff")]
+            )
+            if path:
+                ext = os.path.splitext(path)[1]
+                from datetime import datetime as _dt
+                new_name = f"EDIT_{_dt.now().strftime('%Y%m%d_%H%M%S_%f')}{ext}"
+                dest = os.path.join(CAPTURED_DIR, new_name)
+                shutil.copy2(path, dest)
+                rows = self.controller.table_data.get("rows", [])
+                if 0 <= row_idx < len(rows):
+                    while len(rows[row_idx]) <= col_idx:
+                        rows[row_idx].append("")
+                    rows[row_idx][col_idx] = new_name
+                    self.controller.save_table_data()
+                    self._refresh_table()
+                popup.destroy()
+        
+        def _clear():
+            rows = self.controller.table_data.get("rows", [])
+            if 0 <= row_idx < len(rows):
+                while len(rows[row_idx]) <= col_idx:
+                    rows[row_idx].append("")
+                rows[row_idx][col_idx] = ""
+                self.controller.save_table_data()
+                self._refresh_table()
+            popup.destroy()
+        
+        tk.Button(btn_row, text="📁 Browse Image", font=("Segoe UI", 10),
+                  bg=self.colors["accent_green"], fg="#1e1e2e",
+                  relief="flat", cursor="hand2", padx=12, pady=6,
+                  command=_browse).pack(side="left", padx=8)
+        
+        tk.Button(btn_row, text="🗑️ Clear", font=("Segoe UI", 10),
+                  bg=self.colors["accent_red"], fg="#1e1e2e",
+                  relief="flat", cursor="hand2", padx=12, pady=6,
+                  command=_clear).pack(side="left", padx=8)
+        
+        tk.Button(popup, text="Cancel", font=("Segoe UI", 9),
+                  bg=self.colors["bg_hover"], fg=self.colors["text_secondary"],
+                  relief="flat", cursor="hand2",
+                  command=popup.destroy).pack(pady=8)
+
     def _read_plc_and_save_row(self, capture_images=True):
-        """Read PLC via a FRESH dedicated connection then insert a new row."""
+        """Read PLC data then insert a new row using pending buffered images."""
         columns = self.controller.table_data.get("columns", [])
         # Collect unique read areas
         areas = {}
@@ -1273,35 +1365,35 @@ class DashboardPage(BasePage):
             elif source == "plc" and col.get("plc_config"):
                 new_row.append(self._extract_plc_value(col["plc_config"], plc_data))
             elif source == "image":
-                new_row.append(self._capture_image_for_column(col) if capture_images else "")
+                # Use buffered image from image trigger (if fired before main trigger)
+                t_idx = col.get("image_config", {}).get("trigger_index", 1) - 1  # 1-based → 0-based
+                pending_fname = self._pending_images.get(t_idx, "")
+                if not pending_fname and capture_images:
+                    # Fallback: capture live (same as old behavior)
+                    pending_fname = self._capture_image_for_column(col)
+                new_row.append(pending_fname)
             else:
                 new_row.append("")
         self.controller.table_data["rows"].append(new_row)
         self.controller.save_table_data()
+        # Clear pending images buffer now that row is inserted
+        self._pending_images.clear()
         self.current_page = 0
         self._refresh_table()
         self._update_id_displays()
         self._update_summary_breakdown()
         NotificationToast.show(self, "⚡ PLC Trigger: Data Saved")
-        print(f"[Trigger] Row inserted at {datetime.now().strftime('%H:%M:%S')}")
+        print(f"[Trigger] Row inserted at {datetime.now().strftime('%H:%M:%S')} | pending_images cleared")
 
     def _update_last_row_image(self, img_trigger_cfg, trigger_index=None, trigger_time=None):
-        """Image trigger fired: capture latest image and update the matching column.
+        """Image trigger fired: capture image and store in _pending_images buffer.
+        The image will be placed in the correct column when the MAIN trigger fires.
         
-        Uses last-used-file tracking so we detect NEW images without relying
-        on timestamps (camera may save image BEFORE PLC bit goes ON).
-
         Args:
             img_trigger_cfg: The image trigger settings dict (folder_path, etc.)
             trigger_index:   0-based index of the image trigger (0=first, 1=second...)
             trigger_time:    unused, kept for API compatibility
         """
-        rows    = self.controller.table_data.get("rows", [])
-        columns = self.controller.table_data.get("columns", [])
-        if not rows:
-            print("[ImageTrigger] No rows in table — skipping")
-            return
-        
         folder = img_trigger_cfg.get("folder_path", "").strip()
         if not folder or not os.path.isdir(folder):
             print(f"[ImageTrigger] Folder not found: {folder!r}")
@@ -1310,62 +1402,35 @@ class DashboardPage(BasePage):
         from utils.image_capture import ImageCapture
         cap = ImageCapture()
         
-        # Get the newest image in the source folder (no timestamp filter)
+        # Get the newest image in the source folder
         ok, src_path = cap.get_latest_image(folder)
         if not ok:
-            print(f"[ImageTrigger] No image found: {src_path}")
+            print(f"[ImageTrigger] No image found in folder: {src_path}")
             return
         
         src_name = os.path.basename(src_path)
-        last_used = self._last_captured_file.get(folder, "")
+        print(f"[ImageTrigger] Capturing: {src_name} for trigger_index={trigger_index}")
         
-        if src_name == last_used:
-            print(f"[ImageTrigger] Same image as before ({src_name}) — still capturing")
-        else:
-            print(f"[ImageTrigger] New image detected: {src_name}")
-        
-        # Always copy it (even if same file — trigger means 'take a photo NOW')
+        # Copy to CAPTURED_DIR with unique timestamped name
         import shutil
         from datetime import datetime as _dt
         from config import CAPTURED_DIR
-        ext = os.path.splitext(src_name)[1]
+        ext      = os.path.splitext(src_name)[1]
         new_name = f"TRIG_{_dt.now().strftime('%Y%m%d_%H%M%S_%f')}{ext}"
-        dest_path = os.path.join(CAPTURED_DIR, new_name)
+        dest     = os.path.join(CAPTURED_DIR, new_name)
         try:
-            shutil.copy2(src_path, dest_path)
+            shutil.copy2(src_path, dest)
         except Exception as ex:
             print(f"[ImageTrigger] Copy failed: {ex}")
             return
         
         self._last_captured_file[folder] = src_name
-        filename = new_name
         
-        # Match this trigger to the correct image column by trigger_index
-        last_row = rows[-1]
-        matched_idx = None
-        for col_idx, col in enumerate(columns):
-            if isinstance(col, dict) and col.get("data_source") == "image":
-                col_t_idx = col.get("image_config", {}).get("trigger_index", 1) - 1  # 1-based → 0-based
-                if trigger_index is not None:
-                    if col_t_idx == trigger_index:
-                        matched_idx = col_idx
-                        break
-                else:
-                    matched_idx = col_idx  # fallback: first image column
-                    break
-        
-        if matched_idx is None:
-            print(f"[ImageTrigger] No image column matched for trigger_index={trigger_index}")
-            return
-        
-        while len(last_row) <= matched_idx:
-            last_row.append("")
-        last_row[matched_idx] = filename
-        
-        self.controller.save_table_data()
-        self._refresh_table()
-        NotificationToast.show(self, f"📷 Image: {filename}")
-        print(f"[ImageTrigger] idx={trigger_index} → col={matched_idx}: {filename}")
+        # Store in pending buffer — key is trigger_index (0-based)
+        key = trigger_index if trigger_index is not None else 0
+        self._pending_images[key] = new_name
+        NotificationToast.show(self, f"📷 Image buffered: {new_name}")
+        print(f"[ImageTrigger] Buffered idx={key}: {new_name} (waiting for main trigger)")
 
     # ================================================================
     # PLC FUNCTIONS (manual 'PLC Read' button)
