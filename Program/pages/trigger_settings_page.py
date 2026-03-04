@@ -20,6 +20,7 @@ class TriggerSettingsPage(BasePage):
         # Live monitor state
         self._monitor_running = False
         self._monitor_client = None
+        self._last_main_bit = 0   # for rising-edge detection
         # Widgets set later
         self.main_area_var = None
         self.main_addr_entry = None
@@ -612,6 +613,10 @@ class TriggerSettingsPage(BasePage):
                     self._main_lamp.configure(fg=c),
                     self._main_lamp_lbl.configure(text=t, fg=c)
                 ))
+                # Rising edge → save data to dashboard (same as PLC Read button)
+                if bit_val == 1 and self._last_main_bit == 0:
+                    self.after(0, self._trigger_save_data)
+                self._last_main_bit = bit_val
             
             # Image triggers
             for cfg in image_configs:
@@ -630,6 +635,18 @@ class TriggerSettingsPage(BasePage):
         
         threading.Thread(target=_read, daemon=True).start()
     
+    def _trigger_save_data(self):
+        """Rising edge on main trigger lamp → save data to dashboard (same as PLC Read button)."""
+        dashboard = self.controller.pages.get("dashboard")
+        if not dashboard:
+            print("[TriggerSettings] Dashboard page not found.")
+            return
+        
+        # Share the already-open monitor client so dashboard doesn't open a 2nd connection
+        dashboard._plc_client = self._monitor_client
+        print(f"[TriggerSettings] Rising edge detected → saving data row")
+        dashboard._read_plc_and_save_row(capture_images=True)
+    
     # ================================================================
     # PAGE LIFECYCLE
     # ================================================================
@@ -637,6 +654,7 @@ class TriggerSettingsPage(BasePage):
     def on_show(self):
         """Auto-start monitor when page opens."""
         self._load_image_triggers()
+        self._last_main_bit = 0  # reset edge state on page open
         self._start_monitor()
     
     def on_hide(self):
